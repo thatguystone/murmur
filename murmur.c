@@ -78,7 +78,7 @@ static int _murmur_validate_archives_sort(const void *a, const void *b) {
 
 static char _murmur_validate_archives(const uint32_t archive_count, struct archive_header *archive_headers) {
 	if (archive_headers == NULL || archive_count == 0) {
-		fprintf(stderr, "Can't create a database without archives...\n");
+		M_ERROR("Can't create a database without archives...");
 		return 0;
 	}
 	
@@ -92,26 +92,26 @@ static char _murmur_validate_archives(const uint32_t archive_count, struct archi
 		uint32_t next_spp = next_arch.seconds_per_point;
 		
 		if (spp == next_spp) {
-			fprintf(stderr, "A murmur database may not have two archives with the same precision (%d == %d).\n", spp, next_spp);
+			M_ERROR("A murmur database may not have two archives with the same precision (%d == %d).", spp, next_spp);
 			return 0;
 		}
 		
 		if (next_spp % spp != 0) {
-			fprintf(stderr, "Lower precision archives must evenly divide higher precision archives (%d %% %d != 0).\n", next_spp, spp);
+			M_ERROR("Lower precision archives must evenly divide higher precision archives (%d %% %d != 0).", next_spp, spp);
 			return 0;
 		}
 		
 		uint32_t retention = spp * arch.points;
 		uint32_t next_retention = next_spp * next_arch.points;
 		if (retention > next_retention) {
-			fprintf(stderr, "Lower precision archives must cover larger time intervals than higher precision ones (%d < %d)\n", retention, next_retention);
+			M_ERROR("Lower precision archives must cover larger time intervals than higher precision ones (%d < %d)", retention, next_retention);
 			return 0;
 		}
 		
 		uint32_t archive_points = arch.points;
 		uint32_t points_per_consolidation = next_spp / spp;
 		if (archive_points < points_per_consolidation) {
-			fprintf(stderr, "Each archive must have at least enough points to consolidate to the next archive (archive%d consolidates %d of archive%d's points, but it only has %d total points)\n", i + 1, points_per_consolidation, i, archive_points);
+			M_ERROR("Each archive must have at least enough points to consolidate to the next archive (archive%d consolidates %d of archive%d's points, but it only has %d total points)", i + 1, points_per_consolidation, i, archive_points);
 			return 0;
 		}
 	}
@@ -158,7 +158,7 @@ static uint32_t _murmur_parse_archive_spec(const char *spec, struct archive_head
 	*archive_headers = NULL;
 	
 	if (spec == NULL || *spec == '\0') {
-		fprintf(stderr, "There is no spec to parse...\n");
+		M_ERROR("There is no spec to parse...");
 		return 0;
 	}
 	
@@ -207,7 +207,7 @@ static uint32_t _murmur_parse_archive_spec(const char *spec, struct archive_head
 	return count;
 
 error:
-	fprintf(stderr, "Invalid archive spec\n");
+	M_ERROR("Invalid archive spec");
 	free(dup_spec);
 	free(arch_headers);
 	return 0;
@@ -231,7 +231,6 @@ static int _murmur_get_archive(struct murmur *mmr, const uint64_t timestamp, str
 	for (uint32_t i = 0; i < mmr->archive_count; i++) {
 		arch = &mmr->archives[i];
 		if (arch->retention > diff) {
-			printf("FOUND\n");
 			break;
 		}
 	}
@@ -325,7 +324,7 @@ struct murmur* murmur_open(const char *path) {
 	
 	struct murmur_header h;
 	if (read(fd, &h, sizeof(h)) != sizeof(h)) {
-		fprintf(stderr, "Could not read murmur header: file is corrupted\n");
+		M_ERROR("Could not read murmur header: file is corrupted");
 		goto error;
 	}
 	
@@ -335,7 +334,7 @@ struct murmur* murmur_open(const char *path) {
 	mmr->archive_count = be32toh(h.archive_count);
 	
 	if (mmr->archive_count == 0) {
-		fprintf(stderr, "Murmur file corrupted: no archives specified\n");
+		M_ERROR("Murmur file corrupted: no archives specified");
 		goto error;
 	}
 	
@@ -345,7 +344,7 @@ struct murmur* murmur_open(const char *path) {
 		struct archive_header ah;
 		
 		if (read(fd, &ah, sizeof(ah)) != sizeof(ah)) {
-			fprintf(stderr, "Could not read archive header: file is corrupted\n");
+			M_ERROR("Could not read archive header: file is corrupted");
 			goto error;
 		}
 		
@@ -354,7 +353,7 @@ struct murmur* murmur_open(const char *path) {
 		arch->points = be32toh(ah.points);
 		arch->retention = arch->seconds_per_point * arch->points;
 		
-		printf("Archive header: %u %u %u\n", 
+		M_DEBUG("Archive header: %u %u %u", 
 			be32toh(ah.offset),
 			be32toh(ah.seconds_per_point),
 			be32toh(ah.points)
@@ -393,7 +392,7 @@ static int _murmur_seek_to_point(struct murmur *mmr, struct archive *archive, co
 int murmur_set(struct murmur *mmr, const uint64_t timestamp, const double value) {
 	struct archive *arch;
 	if (_murmur_get_archive(mmr, timestamp, &arch) != 0) {
-		fprintf(stderr, "Could not locate suitable archive for item at timestamp: %ld\n", timestamp);
+		M_ERROR("Could not locate suitable archive for item at timestamp: %ld", timestamp);
 		return -1;
 	}
 	
@@ -424,7 +423,7 @@ int murmur_set(struct murmur *mmr, const uint64_t timestamp, const double value)
 int murmur_get(struct murmur *mmr, const uint64_t timestamp, double * const value) {
 	struct archive *arch;
 	if (_murmur_get_archive(mmr, timestamp, &arch) != 0) {
-		fprintf(stderr, "Could not locate suitable archive for item at timestamp: %ld\n", timestamp);
+		M_ERROR("Could not locate suitable archive for item at timestamp: %ld", timestamp);
 		return -1;
 	}
 	
@@ -435,7 +434,7 @@ int murmur_get(struct murmur *mmr, const uint64_t timestamp, double * const valu
 	
 	struct point pt;
 	if (read(mmr->fd, &pt, sizeof(pt)) != sizeof(pt)) {
-		perror("Could not read record");
+		M_PERROR("Could not read record");
 		return -1;
 	}
 	
@@ -446,7 +445,7 @@ int murmur_get(struct murmur *mmr, const uint64_t timestamp, double * const valu
 
 int main(int argc, char **argv) {
 	if (argc < 2) {
-		fprintf(stderr, "Which murmur file?\n");
+		M_ERROR("Which murmur file?");
 		return 1;
 	}
 	
@@ -476,7 +475,7 @@ int main(int argc, char **argv) {
 	
 	double v = 0;
 	murmur_get(mmr, at, &v);
-	printf("Get: %f\n", v);
+	M_DEBUG("Get: %f", v);
 	
 	murmur_close(mmr);
 }

@@ -6,6 +6,35 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#if defined(COMPILE_DEBUG)
+	#define M_DEBUG(format, ...) fprintf(stderr, "DEBUG : %s:%-4d : " format "\n", __FILE__, __LINE__, ##__VA_ARGS__)
+#else
+	/**
+	 * Output debug info to the console, only when not built for prod.
+	 */
+	#define M_DEBUG(format, ...)
+#endif
+
+/**
+ * General useful information
+ */
+#define M_INFO(format, ...) fprintf(stderr, "INFO : %s:%-4d : " format "\n", __FILE__, __LINE__, ##__VA_ARGS__)
+
+/**
+ * Output warning
+ */
+#define M_WARN(format, ...) fprintf(stderr, "WARN : %s:%-4d : " format "\n", __FILE__, __LINE__, ##__VA_ARGS__)
+
+/**
+ * Output an error we can't recover from
+ */
+#define M_ERROR(format, ...) fprintf(stderr, "ERROR : %s:%-4d : " format "\n", __FILE__, __LINE__, ##__VA_ARGS__)
+
+/**
+ * Output error information from the OS
+ */
+#define M_PERROR(format, ...) fprintf(stderr, "ERROR : %s:%-4d : " format ": %s\n", __FILE__, __LINE__, ##__VA_ARGS__, strerror(errno))
+
 /**
  * How a murmur file should be aggregated.
  */
