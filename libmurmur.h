@@ -3,8 +3,10 @@
  * @file murmur.h
  */
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #if defined(COMPILE_DEBUG)
 	#define M_DEBUG(format, ...) fprintf(stderr, "DEBUG : %s:%-4d : " format "\n", __FILE__, __LINE__, ##__VA_ARGS__)
@@ -49,7 +51,7 @@ enum aggregation_method {
 /**
  * Information about the archive in the murmur file.
  */
-struct archive {
+struct murmur_archive {
 	/** 
 	 * Where the archive begins in the file.
 	 */
@@ -59,7 +61,7 @@ struct archive {
 	 * The amount of time per point.
 	 */
 	uint32_t seconds_per_point;
-	
+		
 	/**
 	 * The number of points in the archive.
 	 */
@@ -69,6 +71,16 @@ struct archive {
 	 * The total number of seconds contained in the archive.
 	 */
 	uint32_t retention;
+	
+	/**
+	 * The total size of the archive, in bytes.
+	 */
+	uint64_t size;
+	
+	/**
+	 * The lower precision archive, below this one. NULL if this is the least-precise.
+	 */
+	struct murmur_archive *lower;
 };
 
 /**
@@ -104,7 +116,7 @@ struct murmur {
 	/**
 	 * An array of archives.
 	 */
-	struct archive *archives;
+	struct murmur_archive *archives;
 };
 
 /**
@@ -113,7 +125,8 @@ struct murmur {
  * @warning This function is destructive: if the given path exists, it will be overriden.
  *
  * @param path The path where the archive should be created
- * @param archives A string specification for how to create the archives.
+ * @param specc The number of items in the spec vector.
+ * @param specv The specs for the individual archives.
  * @param aggregation How stats should be aggregated together.
  * @param x_files_factor The fraction of data points (0-100) in a propagation
  * interval that must have known values for a propagation to occur.
@@ -121,7 +134,7 @@ struct murmur {
  * @return 0 on success
  * @return -1 on failure
  */
-int murmur_create(const char *path, const char *archive_spec, const enum aggregation_method aggregation, const char x_files_factor);
+int murmur_create(const char *path, const uint32_t specc, char **specv, const enum aggregation_method aggregation, const char x_files_factor);
 
 /**
  * Opens a murmur file and prepares it for manipulation.
@@ -159,3 +172,13 @@ int murmur_get(struct murmur *mmr, const uint64_t timestamp, double * const valu
  * @return 0 on success, -1 on failure.
  */
 int murmur_set(struct murmur *mmr, const uint64_t timestamp, const double value);
+
+/**
+ * Dumps basic information about the murmur file, such as its headers, aggregation, etc.
+ */
+int murmur_dump_info(struct murmur *mmr);
+
+/**
+ * Dumps the entire contents of the murmur file.
+ */
+int murmur_dump(struct murmur *mmr);
