@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -g -Wall -std=gnu99 -DCOMPILE_DEBUG=1
+CFLAGS = -O2 -Wall -std=gnu99
 LDFLAGS = 
 
 all: murmur
@@ -7,11 +7,15 @@ all: murmur
 murmur: libmurmur.c libmurmur.h murmur.c 
 	$(CC) $(CFLAGS) $@.c $< -o $@
 
-test: murmur
-	@rm -f test.mmr
-	@echo
-	@./murmur test.mmr 10s:60s 60s:5m
+murmur_test: libmurmur.c libmurmur.h murmur_test.c
+	$(CC) $(CFLAGS) $@.c -o $@
+
+debug: CFLAGS += -g -DCOMPILE_DEBUG=1
+debug: murmur
+
+test: CFLAGS += -DCOMPILE_TEST=1
+test: murmur_test
+	./murmur_test
 
 clean:
-	rm -f murmur
-	rm -f test.mmr
+	rm -f murmur murmur_test murmur_test.mmr

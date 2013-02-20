@@ -2,11 +2,31 @@
 
 #include <endian.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stdlib.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "libmurmur.h"
+
+#ifdef COMPILE_TEST
+	time_t time(void *ptr) {
+		return mmr_test_time;
+	}
+#else
+	#include <time.h>
+#endif
+
+/**
+ * Takes the two data points stored in a point struct and composes
+ * them back into a double.
+ */
+#define PTVAL(pt) (be64toh((pt)->integral) + (be32toh((pt)->fractional)/((double)4294967295)))
+
+/**
+ * Takes the interval stored in a data point and makes it readable
+ * on the host machine.
+ */
+#define PTINT(pt) be64toh((pt)->interval)
 
 /** 
  * A single data point
@@ -15,12 +35,17 @@ struct point {
 	/**
 	 * The start of the interval this point is for.
 	 */
-	uint64_t interval;
+	int64_t interval;
 	
 	/**
-	 * The value at this time.
+	 * The integral value at this time.
 	 */
-	uint64_t value;
+	int64_t integral;
+	
+	/**
+	 * The fractional part of the value at this time.
+	 */
+	uint32_t fractional;
 } __attribute__ ((packed));
 
 /**
@@ -231,7 +256,7 @@ error:
  * @param timestamp The timestamp to fit
  * @param archive[out] The archive that the point should be written into
  */
-static int _murmur_get_archive(struct murmur *mmr, const uint64_t timestamp, struct murmur_archive **archive) {
+static int _murmur_get_archive(struct murmur *mmr, const int64_t timestamp, struct murmur_archive **archive) {
 	uint32_t diff = time(NULL) - timestamp;
 	
 	// If the time is too far in the past, past the support of our file
@@ -240,12 +265,12 @@ static int _murmur_get_archive(struct murmur *mmr, const uint64_t timestamp, str
 	}
 	
 	// If the value is in the future
-	if (diff <= 0) {
+	if (diff < 0) {
 		return -1;
 	}
 	
 	// Find the highest-precision archive that covers timestamp
-	struct murmur_archive *arch;
+	struct murmur_archive *arch = NULL;
 	for (uint32_t i = 0; i < mmr->archive_count; i++) {
 		arch = &mmr->archives[i];
 		if (arch->retention > diff) {
@@ -265,7 +290,7 @@ static int _murmur_get_archive(struct murmur *mmr, const uint64_t timestamp, str
  * @param timestamp The timestamp to seek to
  * @param[out] interval The time that should be written to disk
  */
-static int _murmur_seek_to_point(struct murmur *mmr, struct murmur_archive *arch, const uint64_t timestamp, uint64_t *interval) {
+static int _murmur_seek_to_point(struct murmur *mmr, struct murmur_archive *arch, const int64_t timestamp, int64_t *interval) {
 	*interval = timestamp - (timestamp % arch->seconds_per_point);
 	
 	int seeked = lseek(mmr->fd, arch->offset + (sizeof(struct point) * ((*interval % arch->retention) / arch->seconds_per_point)), SEEK_SET);
@@ -281,53 +306,52 @@ static int _murmur_seek_to_point(struct murmur *mmr, struct murmur_archive *arch
  * this aggregates the points into 1 point using the supplied method.
  */
 static double _murmur_aggregate(enum aggregation_method aggregation, uint64_t pointsc, struct point *pointsv) {
-	uint64_t last_interval, last_i;
-	double val = be64toh(pointsv->value);
+	int64_t last_interval, last_i;
+	double val = PTVAL(pointsv);
 	
 	switch (aggregation) {
-		case average:
+		case agg_average:
 		default:
 			for (uint64_t i = 1; i < pointsc; i++) {
-				val += be64toh((pointsv + i)->value);
+				val += PTVAL(pointsv + i);
 			}
 			val /= pointsc;
 			break;
 			
-		case sum:
+		case agg_sum:
 			for (uint64_t i = 1; i < pointsc; i++) {
-				val += be64toh((pointsv + i)->value);
+				val += PTVAL(pointsv + i);
 			}
 			break;
 		
-		case last:
-			last_interval = be64toh(pointsv->interval);
+		case agg_last:
+			last_interval = PTINT(pointsv);
 			last_i = 0;
 			
 			for (uint64_t i = 1; i < pointsc; i++) {
-				uint64_t l = be64toh((pointsv + i)->interval);
+				uint64_t l = PTINT(pointsv + i);
 				if (l > last_interval) {
 					last_interval = i;
 					last_i = i;
 				}
-			
 			}
 			
-			val = be64toh((pointsv + last_i)->value);
+			val = PTVAL(pointsv + last_i);
 			
 			break;
 		
-		case max:
+		case agg_max:
 			for (uint64_t i = 1; i < pointsc; i++) {
-				double v = be64toh((pointsv + i)->value);
+				double v = PTVAL(pointsv + i);
 				if (v > val) {
 					val = v;
 				}
 			}
 			break;
 		
-		case min:
+		case agg_min:
 			for (uint64_t i = 1; i < pointsc; i++) {
-				double v = be64toh((pointsv + i)->value);
+				double v = PTVAL(pointsv + i);
 				if (v < val) {
 					val = v;
 				}
@@ -339,25 +363,29 @@ static double _murmur_aggregate(enum aggregation_method aggregation, uint64_t po
 }
 
 // Forward declaration: _murmur_propogate and _murmur_arch_set rely on each other
-static int _murmur_propogate(struct murmur *mmr, struct murmur_archive *arch, uint64_t timestamp);
+static int _murmur_propogate(struct murmur *mmr, struct murmur_archive *arch, int64_t timestamp);
 
 /**
- * Given an archive, sets a value in the archive.
+ * Given an archive, sets a value in it.
  *
  * @param mmr Obvious
  * @param arch The archive to set the value in.
  * @param timestamp The timestamp of the data to be set
  * @param value The value of the data to be set
  */
-static int _murmur_arch_set(struct murmur *mmr, struct murmur_archive *arch, const uint64_t timestamp, const double value) {
-	uint64_t interval = 0;
+static int _murmur_arch_set(struct murmur *mmr, struct murmur_archive *arch, const int64_t timestamp, const double value) {
+	int64_t interval = 0;
 	if (_murmur_seek_to_point(mmr, arch, timestamp, &interval) == -1) {
 		return -1;
 	}
 	
+	double integral;
+	double fractional = modf(value, &integral);
+	
 	struct point pt = {
 		.interval = htobe64(interval),
-		.value = htobe64(value),
+		.integral = htobe64((int64_t)integral),
+		.fractional = htobe32((uint32_t)(fractional*4294967295)),
 	};
 	
 	if (write(mmr->fd, &pt, sizeof(pt)) != sizeof(pt)) {
@@ -369,6 +397,32 @@ static int _murmur_arch_set(struct murmur *mmr, struct murmur_archive *arch, con
 }
 
 /**
+ * Given an archive, gets a value from it.
+ */
+static inline int _murmur_arch_get(struct murmur *mmr, struct murmur_archive *arch, const int64_t timestamp, double * const value) {
+	int64_t interval = 0;
+	if (_murmur_seek_to_point(mmr, arch, timestamp, &interval) == -1) {
+		return -1;
+	}
+	
+	struct point pt;
+	if (read(mmr->fd, &pt, sizeof(pt)) != sizeof(pt)) {
+		M_PERROR("Could not read record");
+		return -1;
+	}
+	
+	// Verify the data point we get back is in the right range
+	int64_t ptinterval = PTINT(&pt);
+	if (ptinterval < interval || ptinterval > (interval + arch->seconds_per_point)) {
+		return -1;
+	}
+	
+	*value = PTVAL(&pt);
+	
+	return 0;
+}
+
+/**
  * Takes the values from the more-precise archive and propogates them, recursively, to the less-precise
  * archives.
  *
@@ -376,12 +430,12 @@ static int _murmur_arch_set(struct murmur *mmr, struct murmur_archive *arch, con
  * @param arch The higher-precision archive
  * @param timestamp The timestamp of the data to be propogated down.
  */
-static int _murmur_propogate(struct murmur *mmr, struct murmur_archive *arch, const uint64_t timestamp) {
+static int _murmur_propogate(struct murmur *mmr, struct murmur_archive *arch, const int64_t timestamp) {
 	if (arch->lower == NULL) {
 		return 0;
 	}
 	
-	uint64_t interval_start = 0;
+	int64_t interval_start = 0;
 	struct murmur_archive *lower = arch->lower;
 	
 	// So that the error jumps work
@@ -437,9 +491,8 @@ error:
 	return -1;
 }
 
-
 int murmur_create(const char *path, const uint specc, char **specv, const enum aggregation_method aggregation, const char x_files_factor) {
-	int fd = open(path, O_CREAT|O_WRONLY, S_IRUSR|S_IWUSR|S_IRGRP);
+	int fd = open(path, O_CREAT|O_TRUNC|O_WRONLY, S_IRUSR|S_IWUSR|S_IRGRP);
 	if (fd == -1) {
 		M_PERROR("Could not open file for writing");
 		return -1;
@@ -474,7 +527,7 @@ int murmur_create(const char *path, const uint specc, char **specv, const enum a
 	}
 	
 	struct murmur_header header = {
-		.aggregation = (aggregation == 0 ? average : aggregation),
+		.aggregation = (aggregation == 0 ? agg_average : aggregation),
 		.max_retention = htobe64(max_retention),
 		.x_files_factor = x_files_factor,
 		.archive_count = htobe32(archive_count),
@@ -588,8 +641,8 @@ void murmur_close(struct murmur *mmr) {
 	}
 }
 
-int murmur_set(struct murmur *mmr, const uint64_t timestamp, const double value) {
-	struct murmur_archive *arch;
+int murmur_set(struct murmur *mmr, const int64_t timestamp, const double value) {
+	struct murmur_archive *arch = NULL;
 	if (_murmur_get_archive(mmr, timestamp, &arch) != 0) {
 		M_ERROR("Could not locate suitable archive for item at timestamp: %ld", timestamp);
 		return -1;
@@ -598,27 +651,14 @@ int murmur_set(struct murmur *mmr, const uint64_t timestamp, const double value)
 	return _murmur_arch_set(mmr, arch, timestamp, value);
 }
 
-int murmur_get(struct murmur *mmr, const uint64_t timestamp, double * const value) {
-	struct murmur_archive *arch;
+int murmur_get(struct murmur *mmr, const int64_t timestamp, double * const value) {
+	struct murmur_archive *arch = NULL;
 	if (_murmur_get_archive(mmr, timestamp, &arch) != 0) {
 		M_ERROR("Could not locate suitable archive for item at timestamp: %ld", timestamp);
 		return -1;
 	}
 	
-	uint64_t interval = 0;
-	if (_murmur_seek_to_point(mmr, arch, timestamp, &interval) == -1) {
-		return -1;
-	}
-	
-	struct point pt;
-	if (read(mmr->fd, &pt, sizeof(pt)) != sizeof(pt)) {
-		M_PERROR("Could not read record");
-		return -1;
-	}
-	
-	*value = be64toh(pt.value);
-	
-	return 0;
+	return _murmur_arch_get(mmr, arch, timestamp, value);
 }
 
 int murmur_dump_info(struct murmur *mmr) {
@@ -654,9 +694,12 @@ int murmur_dump(struct murmur *mmr) {
 		return -1;
 	}
 	
+	M_INFO("============= BEGIN DUMP =============");
+	M_INFO("");
+	
 	struct point p;
 	while (read(mmr->fd, &p, sizeof(p)) != 0) {
-		M_INFO("%lu = %lu", be64toh(p.interval), be64toh(p.value));
+		M_INFO("%12lu = %f", PTINT(&p), PTVAL(&p));
 	}
 	
 	return 0;

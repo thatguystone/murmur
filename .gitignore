@@ -1,3 +1,4 @@
 murmur
-test.mmr
+murmur_test
+*.mmr
 *.sublime*
