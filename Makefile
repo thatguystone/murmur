@@ -18,4 +18,4 @@ test: murmur_test
 	./murmur_test
 
 clean:
-	rm -f murmur murmur_test murmur_test.mmr
+	rm -f murmur murmur_test *.mmr

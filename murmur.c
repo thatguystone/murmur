@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "libmurmur.h"
 
@@ -64,6 +65,23 @@ static void _show_usage() {
 	);
 }
 
+static int benchmark() {
+	for (int i = 0; i < 100000; i++) {
+		struct murmur *mmr = murmur_open("murmur_test.mmr");
+		if (mmr == NULL) {
+			return 1;
+		}
+	
+		time_t t = time(NULL);
+		murmur_set(mmr, t, 100);
+		
+		murmur_close(mmr);
+	}
+	
+	
+	return 0;
+}
+
 int main(int argc, char **argv) {
 	if (argc < 2) {
 		M_ERROR("You must specify an action.");
@@ -79,6 +97,8 @@ int main(int argc, char **argv) {
 	
 	char *command = *(argv + 1);
 	char *path = *(argv + 2);
+	
+	return benchmark();
 	
 	if (strcmp("create", command) == 0) {
 		return _create(path, argc-3, argv+3);

@@ -20,7 +20,7 @@
  * Takes the two data points stored in a point struct and composes
  * them back into a double.
  */
-#define PTVAL(pt) (be64toh((pt)->integral) + (be32toh((pt)->fractional)/((double)4294967295)))
+#define PTVAL(pt) (be64toh((pt)->integral) + (be32toh((pt)->fractional)/((double)0xFFFFFFFF)))
 
 /**
  * Takes the interval stored in a data point and makes it readable
@@ -385,7 +385,7 @@ static int _murmur_arch_set(struct murmur *mmr, struct murmur_archive *arch, con
 	struct point pt = {
 		.interval = htobe64(interval),
 		.integral = htobe64((int64_t)integral),
-		.fractional = htobe32((uint32_t)(fractional*4294967295)),
+		.fractional = htobe32((uint32_t)(fractional*0xFFFFFFFF)),
 	};
 	
 	if (write(mmr->fd, &pt, sizeof(pt)) != sizeof(pt)) {
@@ -567,7 +567,7 @@ struct murmur* murmur_open(const char *path) {
 	// So that the goto error's work
 	struct murmur *mmr = NULL;
 	
-	int fd = open(path, O_RDWR);
+	int fd = open(path, O_RDWR, O_DIRECT|O_SYNC);
 	if (fd == -1) {
 		M_PERROR("Could not open murmur file");
 		goto error;
